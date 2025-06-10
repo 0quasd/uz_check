@@ -1,0 +1,52 @@
+name: Check UZ Tickets
+
+on:
+  # Дозволяє запускати воркфлоу вручну з вкладки Actions на GitHub
+  workflow_dispatch:
+
+  # Запускає воркфлоу за розкладом (синтаксис cron)
+  schedule:
+    # Цей приклад запускає перевірку кожні 15 хвилин.
+    # Для зміни інтервалу дивись https://crontab.guru/
+    - cron: '*/15 * * * *'
+
+jobs:
+  check-tickets:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Клонуємо репозиторій, щоб мати доступ до скрипта
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Встановлюємо Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Встановлюємо залежності з requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # 4. Встановлюємо Google Chrome
+      # Це необхідно, бо на стандартних віртуальних машинах GitHub його немає
+      - name: Install Google Chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
+      # 5. Запускаємо наш Python-скрипт
+      - name: Run ticket checker
+        # Тут ми передаємо секрети в змінні середовища для скрипта
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          STATION_FROM_NAME: ${{ secrets.STATION_FROM_NAME }}
+          STATION_TO_NAME: ${{ secrets.STATION_TO_NAME }}
+          STATION_FROM_CODE: ${{ secrets.STATION_FROM_CODE }}
+          STATION_TO_CODE: ${{ secrets.STATION_TO_CODE }}
+          DEPARTURE_DATE: ${{ secrets.DEPARTURE_DATE }}
+        run: python main.py
