@@ -1,103 +1,151 @@
-# check_tickets.py
-import requests
-import os
+# uz_monitor_github.py
 import logging
-import sys
+import time
+import os
+from bs4 import BeautifulSoup
 
-# --- Налаштування ---
-# Ці змінні будуть зчитуватися з секретів GitHub
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+# --- Бібліотеки для автоматизації браузера ---
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import WebDriverException, TimeoutException
 
-# Параметри пошуку квитків
-STATION_FROM_CODE = '2200300'  # Код станції Хмельницький
-STATION_TO_CODE = '2218214'    # Код станції Лазещина
-DEPARTURE_DATE = '2025-06-29'  # Дата, яку ви шукаєте (РРРР-ММ-ДД)
-MIN_SEATS_REQUIRED = 8         # Мінімальна кількість місць
-SEAT_TYPE_LETTER = 'К'         # "К" - Купе, "Л" - Люкс, "П" - Плацкарт
+# ==============================================================================
+# --- НАЛАШТУВАННЯ ---
+# Токен і Chat ID тепер будуть зчитуватися з GitHub Secrets
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-# Налаштування логування для GitHub Actions
+# --- Параметри пошуку квитків ---
+STATION_FROM_CODE = '2200300'
+STATION_TO_CODE = '2218214'
+DEPARTURE_DATE = '2025-06-29'
+MIN_SEATS_REQUIRED = 1 # Змінено на 1, щоб реагувати на будь-яку кількість
+SEAT_TYPE_LETTER = 'К'
+
+# --- Інтервал перевірки (5 хвилин) ---
+CHECK_INTERVAL_SECONDS = 300
+# --- Інтервал для звітів (15 хвилин = 3 цикли по 5 хвилин) ---
+HEARTBEAT_INTERVAL_LOOPS = 3
+# ==============================================================================
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def send_telegram_message(message):
-    """Надсилає повідомлення в Telegram."""
+    import requests
     if not BOT_TOKEN or not CHAT_ID:
-        logging.error("TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не встановлено. Повідомлення не може бути надіслано.")
+        logging.error("BOT_TOKEN або CHAT_ID не знайдено! Перевірте GitHub Secrets.")
         return
-
+        
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': CHAT_ID,
-        'text': message,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
     try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
+        requests.post(url, json=payload, timeout=10).raise_for_status()
         logging.info("Повідомлення успішно надіслано в Telegram.")
     except requests.exceptions.RequestException as e:
         logging.error(f"Помилка надсилання повідомлення в Telegram: {e}")
 
 def check_uz_tickets():
-    """Перевіряє наявність квитків на сайті Укрзалізниці."""
-    search_url = "https://booking.uz.gov.ua/train_search/"
+    search_url = f"https://booking.uz.gov.ua/search-trips/{STATION_FROM_CODE}/{STATION_TO_CODE}/list?startDate={DEPARTURE_DATE}"
     
-    # Оновлений блок заголовків, щоб виглядати ще більш "реально"
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36',
-        'Origin': 'https://booking.uz.gov.ua',
-        'Referer': 'https://booking.uz.gov.ua/'
-    }
-
-    data = {
-        'from': STATION_FROM_CODE,
-        'to': STATION_TO_CODE,
-        'date': DEPARTURE_DATE,
-        'time': '00:00'
-    }
-
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--window-size=1920,1080")
+    # Ці два аргументи критично важливі для роботи в середовищі GitHub Actions
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    driver = None
     try:
-        logging.info(f"Надсилаю запит до УЗ: {STATION_FROM_CODE} -> {STATION_TO_CODE} на {DEPARTURE_DATE}")
-        response = requests.post(search_url, headers=headers, data=data)
-        response.raise_for_status()
-        api_data = response.json()
+        # У GitHub Actions Chrome і chromedriver будуть встановлені автоматично
+        service = ChromeService()
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        logging.info(f"Запускаю браузер і заходжу на сторінку...")
+        driver.get(search_url)
+        
+        logging.info("Чекаю, поки на сторінці з'являться картки з потягами...")
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "TripUnit"))
+        )
+        
+        html_content = driver.page_source
+        logging.info("Сторінку успішно завантажено, починаю аналіз...")
+        soup = BeautifulSoup(html_content, 'lxml')
+        
+        trip_cards = soup.find_all('div', class_='TripUnit')
+        logging.info(f"Знайдено {len(trip_cards)} карток з потягами.")
+        
+        if not trip_cards:
+            return False
 
-        if api_data.get('error') or not api_data.get('data', {}).get('list'):
-            logging.info("Потягів на заданому напрямку чи дату не знайдено.")
-            return
+        found_tickets_messages = []
+        for card in trip_cards:
+            train_number_div = card.find('div', class_='train-number')
+            train_number = train_number_div.get_text(strip=True) if train_number_div else 'N/A'
+            
+            # ... (решта логіки аналізу залишається такою ж)
+            wagon_types = card.find_all('div', class_='wagon-type')
+            for wagon in wagon_types:
+                wagon_type_name_div = wagon.find('div', class_='name')
+                wagon_type_name = wagon_type_name_div.get_text(strip=True) if wagon_type_name_div else ''
 
-        found_tickets = []
-        for train in api_data['data']['list']:
-            for seat_type in train['types']:
-                if seat_type['letter'] == SEAT_TYPE_LETTER and seat_type['places'] >= MIN_SEATS_REQUIRED:
-                    message = (
-                        f"🎉 **Знайдено квитки!** 🎉\n\n"
-                        f"**Маршрут:** {train['from']['station']} -> {train['to']['station']}\n"
-                        f"**Потяг:** `{train['num']}`\n"
-                        f"**Дата відправлення:** {train['from']['date']}\n"
-                        f"**Час:** {train['from']['time']} -> {train['to']['time']}\n"
-                        f"**Тип місць:** Купе ({SEAT_TYPE_LETTER})\n"
-                        f"**Знайдено вільних місць:** *{seat_type['places']}* (потрібно {MIN_SEATS_REQUIRED})"
-                    )
-                    found_tickets.append(message)
+                free_seats_div = wagon.find('div', class_='free-seats')
+                free_seats = 0
+                if free_seats_div:
+                    try:
+                        free_seats = int(free_seats_div.get_text(strip=True).split()[0])
+                    except (ValueError, IndexError):
+                        continue
+                
+                # Надсилаємо, як тільки знайдено хоча б 1 квиток потрібного типу
+                if "купе" in wagon_type_name.lower() and free_seats >= MIN_SEATS_REQUIRED:
+                    station_from_div = card.find('div', class_='station-from')
+                    station_from = station_from_div.find('span', class_='name').get_text(strip=True) if station_from_div else 'N/A'
+                    station_to_div = card.find('div', class_='station-to')
+                    station_to = station_to_div.find('span', class_='name').get_text(strip=True) if station_to_div else 'N/A'
+                    
+                    message = (f"🎉 **ЗНАЙДЕНО КВИТОК!** 🎉\n\n"
+                               f"**Маршрут:** {station_from} -> {station_to}\n"
+                               f"**Потяг:** `{train_number}`\n"
+                               f"**Тип місць:** {wagon_type_name}\n"
+                               f"**Вільних місць:** *{free_seats}*")
+                    send_telegram_message(message)
+                    return True # Повертаємо True, щоб зупинити скрипт
+        
+        logging.info("Знайдено потяги, але місць потрібного типу/кількості немає.")
+        return False
 
-        if found_tickets:
-            full_message = "\n\n---\n\n".join(found_tickets)
-            send_telegram_message(full_message)
-        else:
-            logging.info(f"Квитків не знайдено. Тип: Купе ({SEAT_TYPE_LETTER}), Кількість: {MIN_SEATS_REQUIRED}. Продовжую пошук...")
-
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Помилка запиту до API УЗ: {e}")
-    except ValueError as e:
-        logging.error(f"Помилка розбору відповіді від API УЗ: {e}. Можливо, змінилася структура API.")
+    except TimeoutException:
+        logging.info("За 15 секунд потяги на сторінці не з'явились. Ймовірно, їх немає.")
+        return False
     except Exception as e:
         logging.error(f"Сталася невідома помилка: {e}")
-
+        return False
+    finally:
+        if driver:
+            driver.quit()
+            logging.info("Браузер закрито.")
 
 if __name__ == "__main__":
-    if not all([BOT_TOKEN, CHAT_ID]):
-        print("ПОМИЛКА: Необхідно встановити змінні середовища TELEGRAM_BOT_TOKEN та TELEGRAM_CHAT_ID.", file=sys.stderr)
-        sys.exit(1)
-    check_uz_tickets()
+    if not BOT_TOKEN or not CHAT_ID:
+        logging.error("Необхідно налаштувати секрети BOT_TOKEN та CHAT_ID в репозиторії GitHub.")
+    else:
+        logging.info("Бот-моніторинг квитків запущено на GitHub Actions.")
+        send_telegram_message("✅ **Бот запущений!**\n\nПочинаю моніторинг квитків. Звіт про роботу - кожні 15 хвилин.")
+        
+        loop_counter = 0
+        while True:
+            if check_uz_tickets():
+                logging.info("Квитки знайдено! Завершую роботу.")
+                send_telegram_message("✅ **Квитки знайдено!**\n\nМоніторинг завершено. Для нового пошуку перезапустіть бота.")
+                break
+            
+            loop_counter += 1
+            time.sleep(CHECK_INTERVAL_SECONDS) # Чекаємо 5 хвилин
+
+            if loop_counter % HEARTBEAT_INTERVAL_LOOPS == 0:
+                send_telegram_message(f"⌛️ *Звіт:* Бот працює, квитків поки немає. Наступна перевірка через {int(CHECK_INTERVAL_SECONDS/60)} хв.")
