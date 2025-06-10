@@ -42,10 +42,12 @@ def check_uz_tickets():
     """Перевіряє наявність квитків на сайті Укрзалізниці."""
     search_url = "https://booking.uz.gov.ua/train_search/"
     
-    # Додаємо заголовок User-Agent, щоб імітувати запит від реального браузера
+    # Оновлений блок заголовків, щоб виглядати ще більш "реально"
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36',
+        'Origin': 'https://booking.uz.gov.ua',
+        'Referer': 'https://booking.uz.gov.ua/'
     }
 
     data = {
@@ -57,7 +59,6 @@ def check_uz_tickets():
 
     try:
         logging.info(f"Надсилаю запит до УЗ: {STATION_FROM_CODE} -> {STATION_TO_CODE} на {DEPARTURE_DATE}")
-        # Передаємо в запит оновлені заголовки
         response = requests.post(search_url, headers=headers, data=data)
         response.raise_for_status()
         api_data = response.json()
