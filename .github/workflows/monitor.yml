@@ -1,0 +1,30 @@
+name: Ticket Monitor
+
+on:
+  workflow_dispatch: # Дозволяє запускати вручну
+  schedule:
+    - cron: '0 */2 * * *' # Або запускати автоматично кожні 2 години для економії ресурсів
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ticket monitor
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python uz_monitor_github.py
