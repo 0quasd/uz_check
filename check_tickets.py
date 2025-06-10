@@ -41,10 +41,13 @@ def send_telegram_message(message):
 def check_uz_tickets():
     """Перевіряє наявність квитків на сайті Укрзалізниці."""
     search_url = "https://booking.uz.gov.ua/train_search/"
+    
+    # Додаємо заголовок User-Agent, щоб імітувати запит від реального браузера
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
+
     data = {
         'from': STATION_FROM_CODE,
         'to': STATION_TO_CODE,
@@ -54,6 +57,7 @@ def check_uz_tickets():
 
     try:
         logging.info(f"Надсилаю запит до УЗ: {STATION_FROM_CODE} -> {STATION_TO_CODE} на {DEPARTURE_DATE}")
+        # Передаємо в запит оновлені заголовки
         response = requests.post(search_url, headers=headers, data=data)
         response.raise_for_status()
         api_data = response.json()
@@ -80,9 +84,6 @@ def check_uz_tickets():
         if found_tickets:
             full_message = "\n\n---\n\n".join(found_tickets)
             send_telegram_message(full_message)
-            # Щоб зупинити подальші перевірки після успішного сповіщення,
-            # можна створити файл-маркер, але для GitHub Actions це не потрібно.
-            # Просто вимикаємо воркфлоу вручну.
         else:
             logging.info(f"Квитків не знайдено. Тип: Купе ({SEAT_TYPE_LETTER}), Кількість: {MIN_SEATS_REQUIRED}. Продовжую пошук...")
 
